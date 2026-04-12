@@ -304,6 +304,24 @@ BIBLE_MAP = {
 
 CHAPTER_CACHE = {}
 
+# (bible_ver, bible_sel_op) → 표준 약어
+BOOK_ABBR = {
+    (0,1):'창',(0,2):'출',(0,3):'레',(0,4):'민',(0,5):'신',
+    (0,6):'수',(0,7):'삿',(0,8):'룻',(0,9):'삼상',(0,10):'삼하',
+    (0,11):'왕상',(0,12):'왕하',(0,13):'대상',(0,14):'대하',(0,15):'스',
+    (0,16):'느',(0,17):'에',(0,18):'욥',(0,19):'시',(0,20):'잠',
+    (0,21):'전',(0,22):'아',(0,23):'사',(0,24):'렘',(0,25):'애',
+    (0,26):'겔',(0,27):'단',(0,28):'호',(0,29):'욜',(0,30):'암',
+    (0,31):'옵',(0,32):'욘',(0,33):'미',(0,34):'나',(0,35):'합',
+    (0,36):'습',(0,37):'학',(0,38):'슥',(0,39):'말',
+    (1,1):'마',(1,2):'막',(1,3):'눅',(1,4):'요',(1,5):'행',
+    (1,6):'롬',(1,7):'고전',(1,8):'고후',(1,9):'갈',(1,10):'엡',
+    (1,11):'빌',(1,12):'골',(1,13):'살전',(1,14):'살후',(1,15):'딤전',
+    (1,16):'딤후',(1,17):'딛',(1,18):'몬',(1,19):'히',(1,20):'약',
+    (1,21):'벧전',(1,22):'벧후',(1,23):'요일',(1,24):'요이',
+    (1,25):'요삼',(1,26):'유',(1,27):'계',
+}
+
 # ─────────────────────────────────────────────
 # UI 헬퍼
 # ─────────────────────────────────────────────
@@ -509,23 +527,24 @@ async def parse_and_scrape(text_input):
 
         last_end_pos = match.end()
         bible_ver, bible_sel_op = BIBLE_MAP[current_book]
+        abbr = BOOK_ABBR[(bible_ver, bible_sel_op)]
 
         try:
             if is_jang and jang_verse:
                 key = f"{bible_ver}_{bible_sel_op}_{chapter}:{jang_verse}"
                 if key not in seen_verses:
                     seen_verses.add(key)
-                    set_status(f"가져오는 중: {current_book} {chapter}:{jang_verse} …")
+                    set_status(f"가져오는 중: {abbr} {chapter}:{jang_verse} …")
                     text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, jang_verse)
-                    results.append(f"[{current_book} {chapter}:{jang_verse}] {text}")
+                    results.append(f"[{abbr} {chapter}:{jang_verse}] {text}")
 
             elif is_jang and not jang_verse:
                 key = f"{bible_ver}_{bible_sel_op}_{chapter}장"
                 if key not in seen_verses:
                     seen_verses.add(key)
-                    set_status(f"가져오는 중: {current_book} {chapter}장 …")
+                    set_status(f"가져오는 중: {abbr} {chapter}장 …")
                     text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, "")
-                    results.append(f"[{current_book} {chapter}장] {text}")
+                    results.append(f"[{abbr} {chapter}장] {text}")
 
             elif colon_str:
                 for part in colon_str.split(','):
@@ -536,19 +555,19 @@ async def parse_and_scrape(text_input):
                             key = f"{bible_ver}_{bible_sel_op}_{chapter}:{v}"
                             if key not in seen_verses:
                                 seen_verses.add(key)
-                                set_status(f"가져오는 중: {current_book} {chapter}:{v} …")
+                                set_status(f"가져오는 중: {abbr} {chapter}:{v} …")
                                 text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, str(v))
-                                results.append(f"[{current_book} {chapter}:{v}] {text}")
+                                results.append(f"[{abbr} {chapter}:{v}] {text}")
                     else:
                         key = f"{bible_ver}_{bible_sel_op}_{chapter}:{part}"
                         if key not in seen_verses:
                             seen_verses.add(key)
-                            set_status(f"가져오는 중: {current_book} {chapter}:{part} …")
+                            set_status(f"가져오는 중: {abbr} {chapter}:{part} …")
                             text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, part)
-                            results.append(f"[{current_book} {chapter}:{part}] {text}")
+                            results.append(f"[{abbr} {chapter}:{part}] {text}")
 
         except Exception as e:
-            results.append(f"[{current_book} {chapter}장] 관련 오류: {e}")
+            results.append(f"[{abbr} {chapter}장] 관련 오류: {e}")
 
     return results
 
