@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>회복역 성경 구절 가져오기</title>
+    <script type="module" src="https://pyscript.net/releases/2024.1.1/core.js"></script>
+    <style>
+        /* ── 리셋 ── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        /* ── 전체 높이 확보 ── */
+        html { height: 100%; overflow: hidden; }
+        body {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            font-family: Arial, sans-serif;
+            background: #f0f0f0;
+            overflow: hidden;
+        }
+
+        /* PyScript가 삽입하는 모든 요소 숨김 */
+        py-script, py-splashscreen, py-loader,
+        [id^="py-"], script[type="py"] { display: none !important; }
+
+        /* ── 상단 제목 ── */
+        #app-title {
+            flex: 0 0 auto;
+            text-align: center;
+            padding: 9px;
+            background: #3a7bd5;
+            color: white;
+            font-size: 15px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        /* ── 메인 컨테이너 ── */
+        #main-container {
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            padding: 8px;
+            gap: 8px;
+            overflow: hidden;
+        }
+
+        /* ── 패널 공통 ── */
+        .panel {
+            flex: 1 1 0;
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            background: white;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+            overflow: hidden;
+        }
+
+        /* 패널 헤더 (제목 + 복사 버튼 나란히) */
+        .panel-header {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        .panel-header h2 {
+            font-size: 13px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        /* ── 복사 버튼 ── */
+        #copy-btn {
+            background: #1976d2;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 4px 10px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #copy-btn:hover { background: #1565c0; }
+        #copy-btn.copied { background: #388e3c; }
+
+        /* ── 텍스트 영역 ── */
+        textarea {
+            flex: 1 1 0;
+            min-height: 0;
+            width: 100%;
+            resize: none;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 8px;
+            font-size: 13px;
+            font-family: Arial, sans-serif;
+            line-height: 1.7;
+            outline: none;
+        }
+        textarea:focus { border-color: #3a7bd5; }
+        #output-box { background: #fafafa; }
+
+        /* ── 가운데 버튼 패널 (데스크탑: 세로 배치) ── */
+        #mid-panel {
+            flex: 0 0 76px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        /* ── 공통 버튼 베이스 ── */
+        .action-btn {
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            transition: background 0.2s, opacity 0.2s;
+        }
+        .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #fetch-btn {
+            background: #4CAF50;
+            color: white;
+            font-size: 14px;
+            padding: 14px 0;
+            width: 66px;
+            line-height: 1.6;
+        }
+        #fetch-btn:hover:not(:disabled) { background: #43a047; }
+
+        #clear-btn {
+            background: #e57373;
+            color: white;
+            font-size: 12px;
+            padding: 9px 0;
+            width: 66px;
+        }
+        #clear-btn:hover { background: #c62828; }
+
+        /* ── 스피너 ── */
+        #loading-spinner {
+            display: none;
+            width: 18px; height: 18px;
+            border: 3px solid #ccc;
+            border-top-color: #3a7bd5;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── 하단 상태 바 ── */
+        #status-bar {
+            flex: 0 0 auto;
+            padding: 5px 12px;
+            background: #e8e8e8;
+            border-top: 1px solid #ccc;
+            font-size: 12px;
+            color: #555;
+        }
+
+        /* ════════════════════════════════════
+           모바일 레이아웃 (640px 이하)
+           위: 입력 / 가운데: 버튼 행 / 아래: 결과
+           ════════════════════════════════════ */
+        @media (max-width: 640px) {
+            #main-container {
+                flex-direction: column;
+                padding: 6px;
+                gap: 6px;
+            }
+
+            /* 입력 패널: 화면의 40% */
+            #input-panel  { flex: 2 1 0; }
+            /* 결과 패널: 화면의 60% */
+            #output-panel { flex: 3 1 0; }
+
+            /* 버튼 영역: 가로 한 줄 */
+            #mid-panel {
+                flex: 0 0 auto;
+                flex-direction: row;
+                justify-content: center;
+                gap: 10px;
+                padding: 2px 0;
+            }
+
+            #fetch-btn {
+                width: auto;
+                padding: 11px 22px;
+                font-size: 15px;
+                line-height: 1.4;
+            }
+            #clear-btn {
+                width: auto;
+                padding: 11px 18px;
+                font-size: 14px;
+            }
+
+            textarea { font-size: 14px; }
+
+            #copy-btn { padding: 5px 12px; font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="app-title">회복역 성경 가져오기 v1</div>
+
+<div id="main-container">
+
+    <!-- 입력 패널 -->
+    <div class="panel" id="input-panel">
+        <div class="panel-header">
+            <h2>입력</h2>
+        </div>
+        <textarea id="input-box" placeholder="성경 구절이 포함된 지문을 여기에 붙여넣으세요.&#10;예) 요 3:16, 창 1:1-3, 롬 8장 1절, 마태복음 1장"></textarea>
+    </div>
+
+    <!-- 가운데 버튼 영역 -->
+    <div id="mid-panel">
+        <div id="loading-spinner"></div>
+        <button id="fetch-btn" class="action-btn">가져오기&#10;▶</button>
+        <button id="clear-btn" class="action-btn">지우기</button>
+    </div>
+
+    <!-- 결과 패널 -->
+    <div class="panel" id="output-panel">
+        <div class="panel-header">
+            <h2>결과</h2>
+            <button id="copy-btn" onclick="
+                const t = document.getElementById('output-box');
+                if (!t.value.trim()) return;
+                const btn = this;
+                function showOk() {
+                    btn.textContent = '복사됨 ✓';
+                    btn.classList.add('copied');
+                    setTimeout(() => { btn.textContent = '복사'; btn.classList.remove('copied'); }, 2000);
+                }
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(t.value).then(showOk).catch(() => fallback());
+                } else {
+                    (function fallback() {
+                        t.removeAttribute('readonly');
+                        t.select();
+                        t.setSelectionRange(0, 99999);
+                        document.execCommand('copy');
+                        t.setAttribute('readonly', '');
+                        window.getSelection && window.getSelection().removeAllRanges();
+                        showOk();
+                    })();
+                }
+            ">복사</button>
+        </div>
+        <textarea id="output-box" readonly placeholder="결과가 여기에 표시됩니다."></textarea>
+    </div>
+
+</div>
+
+<div id="status-bar">대기 중...</div>
+
+<script type="py" config='{"packages": ["beautifulsoup4"]}'>
+import re
+import asyncio
+import urllib.parse
+from pyodide.http import pyfetch
+from bs4 import BeautifulSoup
+from pyscript import when, document
+
+# ─────────────────────────────────────────────
+# 성경 책 매핑 (구약=0, 신약=1)
+# ─────────────────────────────────────────────
+BIBLE_MAP = {
+    '창': (0, 1), '창세기': (0, 1), '출': (0, 2), '출애굽기': (0, 2), '레': (0, 3), '레위기': (0, 3),
+    '민': (0, 4), '민수기': (0, 4), '신': (0, 5), '신명기': (0, 5), '수': (0, 6), '여호수아': (0, 6),
+    '삿': (0, 7), '사사기': (0, 7), '룻': (0, 8), '룻기': (0, 8), '삼상': (0, 9), '사무엘상': (0, 9),
+    '삼하': (0, 10), '사무엘하': (0, 10), '왕상': (0, 11), '열왕기상': (0, 11), '왕하': (0, 12), '열왕기하': (0, 12),
+    '대상': (0, 13), '역대상': (0, 13), '대하': (0, 14), '역대하': (0, 14), '스': (0, 15), '에스라': (0, 15),
+    '느': (0, 16), '느헤미야': (0, 16), '에': (0, 17), '에스더': (0, 17), '욥': (0, 18), '욥기': (0, 18),
+    '시': (0, 19), '시편': (0, 19), '잠': (0, 20), '잠언': (0, 20), '전': (0, 21), '전도서': (0, 21),
+    '아': (0, 22), '아가': (0, 22), '사': (0, 23), '이사야': (0, 23), '렘': (0, 24), '예레미야': (0, 24),
+    '애': (0, 25), '예레미야애가': (0, 25), '겔': (0, 26), '에스겔': (0, 26), '단': (0, 27), '다니엘': (0, 27),
+    '호': (0, 28), '호세아': (0, 28), '욜': (0, 29), '요엘': (0, 29), '암': (0, 30), '아모스': (0, 30),
+    '옵': (0, 31), '오바댜': (0, 31), '욘': (0, 32), '요나': (0, 32), '미': (0, 33), '미가': (0, 33),
+    '나': (0, 34), '나훔': (0, 34), '합': (0, 35), '하박국': (0, 35), '습': (0, 36), '스바냐': (0, 36),
+    '학': (0, 37), '학개': (0, 37), '슥': (0, 38), '스가랴': (0, 38), '말': (0, 39), '말라기': (0, 39),
+    '마': (1, 1), '마태복음': (1, 1), '막': (1, 2), '마가복음': (1, 2), '눅': (1, 3), '누가복음': (1, 3),
+    '요': (1, 4), '요한복음': (1, 4), '행': (1, 5), '사도행전': (1, 5), '롬': (1, 6), '로마서': (1, 6),
+    '고전': (1, 7), '고린도전서': (1, 7), '고후': (1, 8), '고린도후서': (1, 8), '갈': (1, 9), '갈라디아서': (1, 9),
+    '엡': (1, 10), '에베소서': (1, 10), '빌': (1, 11), '빌립보서': (1, 11), '골': (1, 12), '골로새서': (1, 12),
+    '살전': (1, 13), '데살로니가전서': (1, 13), '살후': (1, 14), '데살로니가후서': (1, 14), '딤전': (1, 15), '디모데전서': (1, 15),
+    '딤후': (1, 16), '디모데후서': (1, 16), '딛': (1, 17), '디도서': (1, 17), '몬': (1, 18), '빌레몬서': (1, 18),
+    '히': (1, 19), '히브리서': (1, 19), '약': (1, 20), '야고보서': (1, 20), '벧전': (1, 21), '베드로전서': (1, 21),
+    '벧후': (1, 22), '베드로후서': (1, 22), '요일': (1, 23), '요한일서': (1, 23), '요이': (1, 24), '요한이서': (1, 24),
+    '요삼': (1, 25), '요한삼서': (1, 25), '유': (1, 26), '유다서': (1, 26), '계': (1, 27), '요한계시록': (1, 27)
+}
+
+CHAPTER_CACHE = {}
+
+# (bible_ver, bible_sel_op) → 표준 약어
+BOOK_ABBR = {
+    (0,1):'창',(0,2):'출',(0,3):'레',(0,4):'민',(0,5):'신',
+    (0,6):'수',(0,7):'삿',(0,8):'룻',(0,9):'삼상',(0,10):'삼하',
+    (0,11):'왕상',(0,12):'왕하',(0,13):'대상',(0,14):'대하',(0,15):'스',
+    (0,16):'느',(0,17):'에',(0,18):'욥',(0,19):'시',(0,20):'잠',
+    (0,21):'전',(0,22):'아',(0,23):'사',(0,24):'렘',(0,25):'애',
+    (0,26):'겔',(0,27):'단',(0,28):'호',(0,29):'욜',(0,30):'암',
+    (0,31):'옵',(0,32):'욘',(0,33):'미',(0,34):'나',(0,35):'합',
+    (0,36):'습',(0,37):'학',(0,38):'슥',(0,39):'말',
+    (1,1):'마',(1,2):'막',(1,3):'눅',(1,4):'요',(1,5):'행',
+    (1,6):'롬',(1,7):'고전',(1,8):'고후',(1,9):'갈',(1,10):'엡',
+    (1,11):'빌',(1,12):'골',(1,13):'살전',(1,14):'살후',(1,15):'딤전',
+    (1,16):'딤후',(1,17):'딛',(1,18):'몬',(1,19):'히',(1,20):'약',
+    (1,21):'벧전',(1,22):'벧후',(1,23):'요일',(1,24):'요이',
+    (1,25):'요삼',(1,26):'유',(1,27):'계',
+}
+
+# ─────────────────────────────────────────────
+# UI 헬퍼
+# ─────────────────────────────────────────────
+def set_status(msg):
+    document.getElementById("status-bar").textContent = msg
+
+def set_loading(active):
+    spinner = document.getElementById("loading-spinner")
+    btn = document.getElementById("fetch-btn")
+    spinner.style.display = "block" if active else "none"
+    btn.disabled = active
+
+def append_output(text):
+    box = document.getElementById("output-box")
+    box.value += text + "\n"
+
+def clear_output():
+    document.getElementById("output-box").value = ""
+
+# ─────────────────────────────────────────────
+# 인코딩 헬퍼
+# ─────────────────────────────────────────────
+def decode_bytes(raw_bytes):
+    """UTF-8 strict 시도 → 실패 시 EUC-KR (rv.or.kr 는 EUC-KR)."""
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw_bytes.decode("euc-kr", errors="replace")
+
+def is_valid_bible_text(text):
+    """'숫자 + 2자 이상 한글' 패턴이 있으면 유효한 성경 본문."""
+    return bool(re.search(r'[1-9]\d*\s+[가-힣]{2,}', text))
+
+# ─────────────────────────────────────────────
+# 페이지 가져오기 (nginx 로컬 프록시 우선)
+# ─────────────────────────────────────────────
+async def fetch_page(bible_ver, bible_sel_op, chapter):
+    cache_key = f"{bible_ver}_{bible_sel_op}_{chapter}"
+    if cache_key in CHAPTER_CACHE:
+        return CHAPTER_CACHE[cache_key]
+
+    qs = f"bibleVer={bible_ver}&bibOutline=&bibleSelOp={bible_sel_op}&bibChapt={chapter}"
+
+    # nginx /proxy/ → rv.or.kr (같은 서버, CORS 문제 없음)
+    # 외부 CORS 프록시는 fallback으로만 사용
+    original_url = f"http://rv.or.kr/read_recovery.php?{qs}"
+    enc = urllib.parse.quote(original_url, safe="")
+
+    candidates = [
+        f"/proxy/read_recovery.php?{qs}",                       # 1순위: nginx 내장 프록시
+        f"https://corsproxy.io/?{enc}",                          # 2순위: corsproxy.io
+        f"https://api.allorigins.win/raw?url={enc}",             # 3순위: allorigins
+    ]
+
+    last_error = "모든 경로 실패"
+    for url in candidates:
+        try:
+            set_status(f"가져오는 중… ({url[:40]})")
+            response = await pyfetch(url, method="GET",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+            if response.status != 200:
+                last_error = f"HTTP {response.status}"
+                continue
+
+            raw_bytes = await response.bytes()
+            html_text = decode_bytes(raw_bytes)
+
+            soup = BeautifulSoup(html_text, "html.parser")
+            for tag in soup(["script", "style", "header", "footer",
+                             "nav", "title", "noscript"]):
+                tag.extract()
+
+            raw_full_text = soup.get_text(separator=" ", strip=True)
+            raw_full_text = re.sub(r'\([가-힣][^\)]*?[-―–—].*?\)', '', raw_full_text)
+            raw_full_text = re.sub(r'\s+', ' ', raw_full_text)
+
+            if not is_valid_bible_text(raw_full_text):
+                last_error = "성경 본문 패턴 없음"
+                continue
+
+            CHAPTER_CACHE[cache_key] = raw_full_text
+            return raw_full_text
+
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return f"__ERROR__:{last_error}"
+
+# ─────────────────────────────────────────────
+# 구절 추출
+# ─────────────────────────────────────────────
+def extract_verse(text, verse):
+    start_pattern = rf"(?:^|\s){verse}(?!\d)(?!\s*[장편권])\s+"
+    match = re.search(start_pattern, text)
+    if not match:
+        return None
+
+    start_idx = match.end()
+    end_idx = len(text)
+    for i in range(1, 10):
+        next_v = str(int(verse) + i)
+        next_pattern = rf"\s{next_v}(?!\d)(?!\s*[장편권])\s+"
+        next_match = re.search(next_pattern, text[start_idx:])
+        if next_match:
+            end_idx = start_idx + next_match.start()
+            break
+
+    extracted = text[start_idx:end_idx].strip()
+
+    cut_regex = (
+        r'\s+[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\.\s+[가-힣]|'
+        r'\s+[A-Z]\.\s+[가-힣]|'
+        r'\s+[a-z]\.\s+[가-힣]|'
+        r'\s+\d+\.\s+[가-힣][^\.]*?―|'
+        r'\s*\([a-z]\)\s+[가-힣][^\)]*?―|'
+        r'\s*\(\d+\)\s+[가-힣][^\)]*?―|'
+        r'\s*\d+:\d+(-\d+)?\)|'
+        r'\s+제\d+권\s*―|'
+        r'\s*ᐸ\s*\||'
+        r'\s*\'?(?:main_dim|sub_dim|top_btn)\'?'
+    )
+    extracted = re.split(cut_regex, extracted)[0].strip()
+    extracted = re.sub(r'\s*[-―–—]\s*\d+:\d+(-\d+)?.*', '', extracted)
+    return extracted.strip()
+
+async def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
+    raw_full_text = await fetch_page(bible_ver, bible_sel_op, chapter)
+
+    if raw_full_text.startswith("__ERROR__:"):
+        return raw_full_text.replace("__ERROR__:", "오류: ")
+
+    if verse:
+        res = extract_verse(raw_full_text, verse)
+        return res if res else "해당 구절을 웹페이지에서 찾을 수 없습니다."
+    else:
+        verses = []
+        v = 1
+        misses = 0
+        while True:
+            v_text = extract_verse(raw_full_text, str(v))
+            if v_text:
+                verses.append(f"{v} {v_text}")
+                v += 1
+                misses = 0
+            else:
+                v += 1
+                misses += 1
+                if misses > 3:
+                    break
+        return " ".join(verses) if verses else "장 본문을 추출할 수 없습니다."
+
+# ─────────────────────────────────────────────
+# 지문 파싱 & 스크래핑 메인 로직
+# ─────────────────────────────────────────────
+async def parse_and_scrape(text_input):
+    # 한국어 자연어 표현 정규화
+    text_input = re.sub(r'(\d+)\s*장\s*(?=\d)', r'\1:', text_input)
+    text_input = re.sub(r'(\d+)\s*절\s*(?:과|와|및|,\s*)\s*(?=\d)', r'\1, ', text_input)
+    text_input = re.sub(r'(\d+)\s*절\s*(?:에서|부터|-|~)\s*(?=\d)', r'\1-', text_input)
+    text_input = re.sub(r'(?<=\d)\s*절(?:까지)?', '', text_input)
+
+    pattern = (
+        r'([가-힣]+)?\s*(\d+)\s*'
+        r'(?:(장)(?:\s*(\d+)절)?|:\s*'
+        r'(\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:)'
+        r'(?:\s*,\s*\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:))*))'
+    )
+
+    current_book = None
+    last_end_pos = -100
+    results = []
+    seen_verses = set()
+    total = 0
+
+    matches = list(re.finditer(pattern, text_input))
+    # 먼저 총 요청 수 계산
+    for match in matches:
+        book_raw = match.group(1)
+        if book_raw and book_raw in BIBLE_MAP:
+            total += 1
+        elif not book_raw:
+            total += 1
+
+    processed = 0
+
+    for match in matches:
+        book_raw   = match.group(1)
+        chapter    = match.group(2)
+        is_jang    = match.group(3) == '장'
+        jang_verse = match.group(4)
+        colon_str  = match.group(5)
+        start_pos  = match.start()
+
+        if book_raw:
+            if book_raw in BIBLE_MAP:
+                current_book = book_raw
+            else:
+                continue
+        else:
+            if not current_book or (start_pos - last_end_pos) > 500:
+                continue
+
+        last_end_pos = match.end()
+        bible_ver, bible_sel_op = BIBLE_MAP[current_book]
+        abbr = BOOK_ABBR[(bible_ver, bible_sel_op)]
+
+        try:
+            if is_jang and jang_verse:
+                key = f"{bible_ver}_{bible_sel_op}_{chapter}:{jang_verse}"
+                if key not in seen_verses:
+                    seen_verses.add(key)
+                    set_status(f"가져오는 중: {abbr} {chapter}:{jang_verse} …")
+                    text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, jang_verse)
+                    results.append(f"[{abbr} {chapter}:{jang_verse}] {text}")
+
+            elif is_jang and not jang_verse:
+                key = f"{bible_ver}_{bible_sel_op}_{chapter}장"
+                if key not in seen_verses:
+                    seen_verses.add(key)
+                    set_status(f"가져오는 중: {abbr} {chapter}장 …")
+                    text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, "")
+                    results.append(f"[{abbr} {chapter}장] {text}")
+
+            elif colon_str:
+                for part in colon_str.split(','):
+                    part = part.strip()
+                    if '-' in part:
+                        v_start, v_end = part.split('-')
+                        for v in range(int(v_start.strip()), int(v_end.strip()) + 1):
+                            key = f"{bible_ver}_{bible_sel_op}_{chapter}:{v}"
+                            if key not in seen_verses:
+                                seen_verses.add(key)
+                                set_status(f"가져오는 중: {abbr} {chapter}:{v} …")
+                                text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, str(v))
+                                results.append(f"[{abbr} {chapter}:{v}] {text}")
+                    else:
+                        key = f"{bible_ver}_{bible_sel_op}_{chapter}:{part}"
+                        if key not in seen_verses:
+                            seen_verses.add(key)
+                            set_status(f"가져오는 중: {abbr} {chapter}:{part} …")
+                            text = await fetch_verse_text(bible_ver, bible_sel_op, chapter, part)
+                            results.append(f"[{abbr} {chapter}:{part}] {text}")
+
+        except Exception as e:
+            results.append(f"[{abbr} {chapter}장] 관련 오류: {e}")
+
+    return results
+
+# ─────────────────────────────────────────────
+# 버튼 이벤트
+# ─────────────────────────────────────────────
+@when("click", "#fetch-btn")
+async def on_fetch_click(event):
+    text_input = document.getElementById("input-box").value.strip()
+    if not text_input:
+        set_status("경고: 왼쪽에 지문을 먼저 입력해주세요.")
+        return
+
+    clear_output()
+    set_loading(True)
+    set_status("스크래핑 시작 중...")
+
+    results = await parse_and_scrape(text_input)
+
+    if not results:
+        append_output("지문에서 유효한 성경 구절을 찾지 못했습니다.")
+    else:
+        for res in results:
+            append_output(res)
+
+    set_loading(False)
+    set_status(f"완료! — {len(results)}개 구절 가져옴")
+
+@when("click", "#clear-btn")
+def on_clear_click(event):
+    document.getElementById("input-box").value = ""
+    clear_output()
+    set_status("대기 중...")
+</script>
+
+</body>
+</html>

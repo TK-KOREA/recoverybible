@@ -125,13 +125,9 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn):
     output_box.delete('1.0', tk.END)
     
     # 🔥 핵심 로직: 한국어 자연어 '장/절' 표현을 기계가 인식하기 쉬운 기호로 사전 정규화(치환)
-    # 1. "13장 33" -> "13:33"
     text_input = re.sub(r'(\d+)\s*장\s*(?=\d)', r'\1:', text_input)
-    # 2. "33절과 34", "33절 및 34", "33절, 34" -> "33, 34"
     text_input = re.sub(r'(\d+)\s*절\s*(?:과|와|및|,\s*)\s*(?=\d)', r'\1, ', text_input)
-    # 3. "33절에서 35", "33절부터 35" -> "33-35"
     text_input = re.sub(r'(\d+)\s*절\s*(?:에서|부터|-|~)\s*(?=\d)', r'\1-', text_input)
-    # 4. 숫자 바로 뒤에 남은 불필요한 "절", "절까지" 단어 삭제
     text_input = re.sub(r'(?<=\d)\s*절(?:까지)?', '', text_input)
     
     pattern = r'([가-힣]+)?\s*(\d+)\s*(?:(장)(?:\s*(\d+)절)?|:\s*(\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:)(?:\s*,\s*\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:))*))'
@@ -157,7 +153,6 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn):
             else:
                 continue 
         else:
-            # 이전 구절을 찾은 곳에서부터 거리가 500글자 이내라면 같은 성경책(예: 계시록)으로 간주
             if not current_book or (start_pos - last_end_pos) > 500:
                 continue
                 
@@ -228,32 +223,51 @@ def on_fetch_click(input_box, output_box, status_label, fetch_btn):
     thread.daemon = True
     thread.start()
 
+# ==========================================
+# GUI 디자인 부분 (Grid 레이아웃 적용으로 양쪽 크기 동일하게 맞춤)
+# ==========================================
+
 root = tk.Tk()
 root.title("회복역 성경 스크래퍼 v7.0 (자연어 처리 AI 엔진 탑재)")
 root.geometry("1000x600")
 
+# 하단 상태 바를 먼저 바닥에 붙입니다.
+status_label = tk.Label(root, text="대기 중...", font=("Arial", 10), fg="gray")
+status_label.pack(side=tk.BOTTOM, anchor="w", padx=10, pady=5)
+
+# 메인 프레임 생성
 main_frame = tk.Frame(root)
 main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
+# 핵심: 세 구역(왼쪽창, 중앙버튼, 오른쪽창)의 비율을 Grid로 설정
+# uniform="equal_cols" 옵션이 두 창의 크기를 수학적으로 똑같이 강제합니다.
+main_frame.columnconfigure(0, weight=1, uniform="equal_cols") # 왼쪽
+main_frame.columnconfigure(1, weight=0)                       # 중앙 (버튼 크기만큼만)
+main_frame.columnconfigure(2, weight=1, uniform="equal_cols") # 오른쪽
+main_frame.rowconfigure(0, weight=1)                          # 높이는 꽉 채우게
+
+# 1. 왼쪽 입력 영역
 left_frame = tk.Frame(main_frame)
-left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+left_frame.grid(row=0, column=0, sticky="nsew")
 tk.Label(left_frame, text="지문 입력", font=("Arial", 12, "bold")).pack(anchor="w")
 input_box = scrolledtext.ScrolledText(left_frame, wrap=tk.WORD, font=("Arial", 11))
 input_box.pack(fill=tk.BOTH, expand=True, pady=5)
 
-mid_frame = tk.Frame(main_frame)
-mid_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10)
-fetch_btn = tk.Button(mid_frame, text="가져오기\n▶", font=("Arial", 12, "bold"), width=8, height=3, bg="#4CAF50", fg="black",
-                      command=lambda: on_fetch_click(input_box, output_box, status_label, fetch_btn))
-fetch_btn.pack(expand=True)
-
+# 2. 오른쪽 결과 영역 (가운데 버튼에서 이 변수를 써야 하므로 먼저 생성)
 right_frame = tk.Frame(main_frame)
-right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+right_frame.grid(row=0, column=2, sticky="nsew")
 tk.Label(right_frame, text="스크래핑 결과", font=("Arial", 12, "bold")).pack(anchor="w")
 output_box = scrolledtext.ScrolledText(right_frame, wrap=tk.WORD, font=("Arial", 11))
 output_box.pack(fill=tk.BOTH, expand=True, pady=5)
 
-status_label = tk.Label(root, text="대기 중...", font=("Arial", 10), fg="gray")
-status_label.pack(side=tk.BOTTOM, anchor="w", padx=10, pady=5)
+# 3. 중앙 버튼 영역
+mid_frame = tk.Frame(main_frame)
+mid_frame.grid(row=0, column=1, sticky="ns", padx=10)
+fetch_btn = tk.Button(mid_frame, text="가져오기\n▶", font=("Arial", 12, "bold"), 
+                      width=8, height=3, bg="#4CAF50", fg="black")
+fetch_btn.config(command=lambda: on_fetch_click(input_box, output_box, status_label, fetch_btn))
+
+# 버튼을 중앙 프레임 안에서 수직 가운데 정렬
+fetch_btn.pack(expand=True)
 
 root.mainloop()

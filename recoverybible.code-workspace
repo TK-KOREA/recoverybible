@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"python-envs.pythonProjects": [
+			{
+				"path": "getbibletext.py",
+				"envManager": "ms-python.python:venv",
+				"packageManager": "ms-python.python:pip",
+				"workspace": "recoverybible"
+			}
+		]
+	}
+}
