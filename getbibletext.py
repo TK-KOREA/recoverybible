@@ -249,9 +249,9 @@ def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
 
 def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
     cache_key = f"{bible_ver}_{bible_sel_op}_{chapter}"
-    
+
     if cache_key in CHAPTER_CACHE:
-        raw_full_text = CHAPTER_CACHE[cache_key]
+        soup = CHAPTER_CACHE[cache_key]
     else:
         url = f"http://rv.or.kr/read_recovery.php?bibleVer={bible_ver}&bibOutline=&bibleSelOp={bible_sel_op}&bibChapt={chapter}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)'}
@@ -259,64 +259,29 @@ def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
             response = requests.get(url, headers=headers, timeout=10)
             response.encoding = 'utf-8' if 'utf-8' in response.headers.get('content-type', '').lower() else 'euc-kr'
             soup = BeautifulSoup(response.text, 'html.parser')
-            
-            for tag in soup(["script", "style", "header", "footer", "nav", "title", "noscript"]):
-                tag.extract()
-                
-            raw_full_text = soup.get_text(separator=' ', strip=True)
-            raw_full_text = re.sub(r'\([가-힣][^\)]*?[-―–—].*?\)', '', raw_full_text)
-            raw_full_text = re.sub(r'\s+', ' ', raw_full_text)
-            CHAPTER_CACHE[cache_key] = raw_full_text
-            
+            CHAPTER_CACHE[cache_key] = soup
         except Exception as e:
             return f"(오류 발생: {e})"
 
-    def extract_v(text, v):
-        start_pattern = rf"(?:^|\s){v}(?!\d)(?!\s*[장편권])\s+"
-        match = re.search(start_pattern, text)
-        if not match:
-            return None
-            
-        start_idx = match.end()
-        end_idx = len(text)
-        
-        for i in range(1, 10):
-            next_v = str(int(v) + i)
-            next_pattern = rf"\s{next_v}(?!\d)(?!\s*[장편권])\s+"
-            next_match = re.search(next_pattern, text[start_idx:])
-            if next_match:
-                end_idx = start_idx + next_match.start()
-                break
-                
-        extracted = text[start_idx:end_idx].strip()
-        
-        cut_regex = (
-            r'\s+[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\.\s+[가-힣]|'   
-            r'\s+[A-Z]\.\s+[가-힣]|'                  
-            r'\s+[a-z]\.\s+[가-힣]|'                  
-            r'\s+\d+\.\s+[가-힣][^\.]*?―|'                    
-            r'\s*\([a-z]\)\s+[가-힣][^\)]*?―|'                
-            r'\s*\(\d+\)\s+[가-힣][^\)]*?―|'                  
-            r'\s*\d+:\d+(-\d+)?\)|'  
-            r'\s+제\d+권\s*―|'                        
-            r'\s*ᐸ\s*\||' 
-            r'\s*\'?(?:main_dim|sub_dim|top_btn)\'?'
-        )
-        
-        extracted = re.split(cut_regex, extracted)[0].strip()
-        extracted = re.sub(r'\s*[-―–—]\s*\d+:\d+(-\d+)?.*', '', extracted)
-        
-        return extracted.strip()
+    def extract_v(v):
+        # <div class="num" id="절번호"> 구조를 직접 찾아서 정확한 절 텍스트 추출
+        num_div = soup.find('div', class_='num', id=str(v))
+        if num_div:
+            parent_verse = num_div.parent
+            text_div = parent_verse.find('div', class_='text')
+            if text_div:
+                return text_div.get_text(strip=True)
+        return None
 
     if verse:
-        res = extract_v(raw_full_text, verse)
+        res = extract_v(verse)
         return res if res else "해당 구절을 웹페이지에서 찾을 수 없습니다."
     else:
         verses = []
         v = 1
         consecutive_misses = 0
         while True:
-            v_text = extract_v(raw_full_text, v)
+            v_text = extract_v(str(v))
             if v_text:
                 verses.append(f"{v} {v_text}")
                 v += 1
@@ -324,9 +289,9 @@ def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
             else:
                 v += 1
                 consecutive_misses += 1
-                if consecutive_misses > 3: 
+                if consecutive_misses > 3:
                     break
-        
+
         if verses:
             return " ".join(verses)
         else:
@@ -344,47 +309,72 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_en
     text_input = re.sub(r'(?<=\d)\s*절(?:까지)?', '', text_input)
     
     pattern = r'([가-힣]+)?\s*(\d+)\s*(?:(장)(?:\s*(\d+)절)?|:\s*(\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:)(?:\s*,\s*\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:))*))'
-    
+
     current_book = None
     last_end_pos = -100
-    
+
     results = []
     seen_verses = set()
-    
+
+    def append_result(bv, bso, ch, vs):
+        valid, err_msg = validate_ref(bv, bso, ch, vs)
+        if not valid:
+            results.append(f"[오류] {err_msg}")
+            return
+        ko_ref = get_korean_ref(bv, bso, ch, vs)
+        text = fetch_verse_text(bv, bso, ch, vs)
+        line = f"[{ko_ref}] {text}"
+        if include_english:
+            en_text = fetch_english_verse_text(bv, bso, ch, vs)
+            en_ref = get_english_ref(bv, bso, ch, vs)
+            line += f"\n[{en_ref}] {en_text}"
+        results.append(line)
+
+    # 장 횡단 범위 처리: "히 1:1-3:1" → 1장1절 ~ 3장1절 전체 구절
+    def expand_cross_range(m):
+        book_raw = m.group(1)
+        if book_raw not in BIBLE_MAP:
+            return m.group(0)
+        bv, bso = BIBLE_MAP[book_raw]
+        ch1, v1, ch2, v2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        key = (bv, bso)
+        if key not in VERSE_COUNTS or ch1 > ch2:
+            return m.group(0)
+        chapters = VERSE_COUNTS[key]
+        for ch in range(ch1, min(ch2, len(chapters)) + 1):
+            max_v = chapters[ch - 1]
+            start_v = v1 if ch == ch1 else 1
+            end_v = v2 if ch == ch2 else max_v
+            for v in range(start_v, min(end_v, max_v) + 1):
+                ukey = f"{bv}_{bso}_{ch}:{v}"
+                if ukey not in seen_verses:
+                    seen_verses.add(ukey)
+                    append_result(bv, bso, str(ch), str(v))
+        return ''  # 본 루프에서 중복 처리되지 않도록 제거
+
+    cross_pattern = r'([가-힣]+)\s*(\d+):(\d+)\s*-\s*(\d+):(\d+)'
+    text_input = re.sub(cross_pattern, expand_cross_range, text_input)
+
     for match in re.finditer(pattern, text_input):
         book_raw = match.group(1)
         chapter = match.group(2)
         is_jang_word = match.group(3) == '장'
         jang_verse = match.group(4)
         colon_verses_str = match.group(5)
-        
+
         start_pos = match.start()
-        
+
         if book_raw:
             if book_raw in BIBLE_MAP:
                 current_book = book_raw
             else:
-                continue 
+                continue
         else:
             if not current_book or (start_pos - last_end_pos) > 500:
                 continue
-                
+
         last_end_pos = match.end()
         bible_ver, bible_sel_op = BIBLE_MAP[current_book]
-        
-        def append_result(bv, bso, ch, vs):
-            valid, err_msg = validate_ref(bv, bso, ch, vs)
-            if not valid:
-                results.append(f"[오류] {err_msg}")
-                return
-            ko_ref = get_korean_ref(bv, bso, ch, vs)
-            text = fetch_verse_text(bv, bso, ch, vs)
-            line = f"[{ko_ref}] {text}"
-            if include_english:
-                en_text = fetch_english_verse_text(bv, bso, ch, vs)
-                en_ref = get_english_ref(bv, bso, ch, vs)
-                line += f"\n[{en_ref}] {en_text}"
-            results.append(line)
 
         try:
             if is_jang_word and jang_verse:
@@ -394,10 +384,14 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_en
                     append_result(bible_ver, bible_sel_op, chapter, jang_verse)
 
             elif is_jang_word and not jang_verse:
-                unique_key = f"{bible_ver}_{bible_sel_op}_{chapter}장"
-                if unique_key not in seen_verses:
-                    seen_verses.add(unique_key)
-                    append_result(bible_ver, bible_sel_op, chapter, "")
+                key = (bible_ver, bible_sel_op)
+                ch_int = int(chapter)
+                max_v = VERSE_COUNTS.get(key, [0] * ch_int)[ch_int - 1] if key in VERSE_COUNTS and ch_int <= len(VERSE_COUNTS[key]) else 0
+                for v in range(1, max_v + 1):
+                    unique_key = f"{bible_ver}_{bible_sel_op}_{chapter}:{v}"
+                    if unique_key not in seen_verses:
+                        seen_verses.add(unique_key)
+                        append_result(bible_ver, bible_sel_op, chapter, str(v))
 
             elif colon_verses_str:
                 verse_parts = colon_verses_str.split(',')
