@@ -1,2 +1,17 @@
-빌드와 실행
-docker build -t getrecoverybible . && docker run -d -p 3001:80 getrecoverybible
+
+
+# 한국어/영어 각각 별도 파일로 저장 (신규)
+python getBibleAll.py --both
+# → recovery_bible_ko.xml
+# → recovery_bible_en.xml
+
+# 한국어만
+python getBibleAll.py
+
+# 영어만
+python getBibleAll.py --lang en
+
+# 신약만 각각
+python getBibleAll.py --both --books 40 66
+
+
