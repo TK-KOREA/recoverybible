@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python *)",
+      "Bash(where pyinstaller *)",
+      "Bash(python -m pip install --upgrade pyinstaller requests beautifulsoup4)",
+      "Bash(python -m PyInstaller --clean --noconfirm getbibletext.spec)",
+      "Bash(grep -i -E \"\\\\.\\(ico|png|jpg|jpeg\\)$\")"
+    ]
+  }
+}
