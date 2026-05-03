@@ -158,6 +158,14 @@ VERSE_COUNTS = {
     (1, 27): [20,29,22,11,14,17,17,13,21,11,19,18,18,20,8,21,18,24,21,15,27,21],
 }
 
+# 단일 장 책 (옵/오바댜, 몬/빌레몬서, 요이/요한이서, 요삼/요한삼서, 유/유다서)
+# 장 구분이 없어 bibChapt=1 고정, "유 20" 같은 입력은 절(verse)로 해석해야 함
+SINGLE_CHAPTER_BOOKS = sorted(
+    (name for name, key in BIBLE_MAP.items()
+     if key in VERSE_COUNTS and len(VERSE_COUNTS[key]) == 1),
+    key=len, reverse=True
+)
+
 def validate_ref(bv, bso, ch, vs):
     key = (bv, bso)
     if key not in VERSE_COUNTS:
@@ -307,7 +315,16 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_en
     text_input = re.sub(r'(\d+)\s*절\s*(?:과|와|및|,\s*)\s*(?=\d)', r'\1, ', text_input)
     text_input = re.sub(r'(\d+)\s*절\s*(?:에서|부터|-|~)\s*(?=\d)', r'\1-', text_input)
     text_input = re.sub(r'(?<=\d)\s*절(?:까지)?', '', text_input)
-    
+
+    # 단일 장 책: "유 20" → "유 1:20" (장 구분이 없으므로 숫자를 절로 해석)
+    # ":"·"장"·연속 숫자·한글이 뒤따르면 변환하지 않음 ("유 1:20", "유 1장" 등은 그대로 유지)
+    for _book in SINGLE_CHAPTER_BOOKS:
+        text_input = re.sub(
+            rf'({re.escape(_book)})\s+(\d+)(?![:\d장가-힣])',
+            r'\1 1:\2',
+            text_input
+        )
+
     pattern = r'([가-힣]+)?\s*(\d+)\s*(?:(장)(?:\s*(\d+)절)?|:\s*(\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:)(?:\s*,\s*\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:))*))'
 
     current_book = None

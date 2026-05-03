@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pyinstaller --version)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(\".venv/Scripts/pyinstaller.exe\" --onefile --windowed --name \"회복역성경가져오기\" getbibletext.py)",
+      "Bash(\".venv/Scripts/pyinstaller.exe\" --onefile --windowed --icon=favicon.ico --name \"회복역성경가져오기\" getbibletext.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -m PyInstaller --noconfirm \"회복역성경가져오기.spec\")"
+    ]
+  }
+}
