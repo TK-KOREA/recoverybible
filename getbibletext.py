@@ -2,9 +2,12 @@ import tkinter as tk
 from tkinter import scrolledtext, messagebox
 import tkinter.font as tkfont
 import threading
+import time
 import requests
 from bs4 import BeautifulSoup
 import re
+
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
 # 구약(0) 및 신약(1)의 책 이름과 bibleSelOp 매핑 딕셔너리
 BIBLE_MAP = {
@@ -108,7 +111,7 @@ VERSE_COUNTS = {
     (0, 16): [11,20,32,23,19,19,73,18,38,39,36,47,31],
     (0, 17): [22,23,15,17,14,14,10,17,32,3],
     (0, 18): [22,13,26,21,27,30,21,22,35,22,20,25,28,22,35,22,16,21,29,29,34,30,17,25,6,14,23,28,25,31,40,22,33,37,16,33,24,41,30,24,34,17],
-    (0, 19): [6,12,8,8,12,10,17,9,20,18,7,8,6,7,5,11,15,50,14,9,13,31,6,10,22,12,14,9,11,12,24,11,22,22,28,12,40,22,13,17,13,11,5,26,17,11,9,14,20,23,19,9,6,7,23,13,11,17,12,8,12,11,10,13,20,7,35,36,5,24,20,28,23,10,12,20,72,13,19,16,8,18,12,13,17,7,18,52,17,16,15,5,23,11,13,12,9,9,5,8,28,22,35,45,48,43,13,31,7,10,10,9,8,18,19,2,29,176,7,8,9,4,8,5,6,5,6,8,8,3,18,3,3,21,26,9,8,24,13,10,7,12,15,21,10,20,14,9,6,6],
+    (0, 19): [6,12,8,8,12,10,17,9,20,18,7,8,6,7,5,11,15,50,14,9,13,31,6,10,22,12,14,9,11,12,24,11,22,22,28,12,40,22,13,17,13,11,5,26,17,11,9,14,20,23,19,9,6,7,23,13,11,11,17,12,8,12,11,10,13,20,7,35,36,5,24,20,28,23,10,12,20,72,13,19,16,8,18,12,13,17,7,18,52,17,16,15,5,23,11,13,12,9,9,5,8,28,22,35,45,48,43,13,31,7,10,10,9,8,18,19,2,29,176,7,8,9,4,8,5,6,5,6,8,8,3,18,3,3,21,26,9,8,24,13,10,7,12,15,21,10,20,14,9,6],
     (0, 20): [33,22,35,27,23,35,27,36,18,32,31,28,25,35,33,33,28,24,29,30,31,29,35,34,28,28,27,28,27,33,31],
     (0, 21): [18,26,22,16,20,12,29,17,18,20,10,14],
     (0, 22): [17,17,11,16,16,13,13,14],
@@ -201,7 +204,7 @@ def get_english_ref(bv, bso, ch, vs):
 CHAPTER_CACHE = {}
 ENGLISH_CHAPTER_CACHE = {}
 
-def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
+def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse="", retries=3):
     if (bible_ver, bible_sel_op) not in ENGLISH_BOOK_MAP:
         return "(영어 회복역: 해당 책 정보 없음)"
 
@@ -212,14 +215,19 @@ def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
         soup = ENGLISH_CHAPTER_CACHE[cache_key]
     else:
         url = f"https://text.recoveryversion.bible/{book_num}_{book_name}_{chapter}.htm"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            ENGLISH_CHAPTER_CACHE[cache_key] = soup
-        except Exception as e:
-            return f"(영어 오류: {e})"
+        soup = None
+        for attempt in range(retries):
+            try:
+                response = requests.get(url, headers=HEADERS, timeout=15)
+                response.encoding = 'utf-8'
+                soup = BeautifulSoup(response.text, 'html.parser')
+                ENGLISH_CHAPTER_CACHE[cache_key] = soup
+                break
+            except Exception as e:
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    return f"(영어 오류: {e})"
 
     def extract_by_anchor(s, ch, v):
         # <p id="Heb11-7" class="verse"> 형식: id가 {책약어}{장}-{절}
@@ -255,21 +263,26 @@ def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
         return ' '.join(verses) if verses else "(영어 회복역: 장 본문을 추출할 수 없습니다)"
 
 
-def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
+def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse="", retries=3):
     cache_key = f"{bible_ver}_{bible_sel_op}_{chapter}"
 
     if cache_key in CHAPTER_CACHE:
         soup = CHAPTER_CACHE[cache_key]
     else:
         url = f"http://rv.or.kr/read_recovery.php?bibleVer={bible_ver}&bibOutline=&bibleSelOp={bible_sel_op}&bibChapt={chapter}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)'}
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            response.encoding = 'utf-8' if 'utf-8' in response.headers.get('content-type', '').lower() else 'euc-kr'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            CHAPTER_CACHE[cache_key] = soup
-        except Exception as e:
-            return f"(오류 발생: {e})"
+        soup = None
+        for attempt in range(retries):
+            try:
+                response = requests.get(url, headers=HEADERS, timeout=15)
+                response.encoding = 'utf-8' if 'utf-8' in response.headers.get('content-type', '').lower() else 'euc-kr'
+                soup = BeautifulSoup(response.text, 'html.parser')
+                CHAPTER_CACHE[cache_key] = soup
+                break
+            except Exception as e:
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    return f"(오류 발생: {e})"
 
     def extract_v(v):
         # <div class="num" id="절번호"> 구조를 직접 찾아서 정확한 절 텍스트 추출
