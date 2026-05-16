@@ -2,12 +2,10 @@ import tkinter as tk
 from tkinter import scrolledtext, messagebox
 import tkinter.font as tkfont
 import threading
-import time
-import requests
-from bs4 import BeautifulSoup
+import os
+import sys
 import re
-
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+import xml.etree.ElementTree as ET
 
 # 구약(0) 및 신약(1)의 책 이름과 bibleSelOp 매핑 딕셔너리
 BIBLE_MAP = {
@@ -200,123 +198,83 @@ def get_english_ref(bv, bso, ch, vs):
     else:
         return f"{abbrev} {ch}"
 
-# 다운로드 속도를 비약적으로 높여주는 장(Chapter) 캐시 메모리
-CHAPTER_CACHE = {}
-ENGLISH_CHAPTER_CACHE = {}
+# XML 파일에서 로드한 성경 본문 (book_num -> chapter -> verse -> text)
+KOREAN_BIBLE = {}
+ENGLISH_BIBLE = {}
 
-def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse="", retries=3):
-    if (bible_ver, bible_sel_op) not in ENGLISH_BOOK_MAP:
-        return "(영어 회복역: 해당 책 정보 없음)"
+def _resource_path(filename):
+    # PyInstaller 번들(_MEIPASS) 또는 일반 실행 환경 모두에서 리소스 위치를 찾음
+    base = getattr(sys, '_MEIPASS', None)
+    if base and os.path.isfile(os.path.join(base, filename)):
+        return os.path.join(base, filename)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
 
-    book_num, book_name = ENGLISH_BOOK_MAP[(bible_ver, bible_sel_op)]
-    cache_key = f"en_{book_num}_{chapter}"
+def _load_bible_xml(filename):
+    path = _resource_path(filename)
+    tree = ET.parse(path)
+    root = tree.getroot()
+    books = {}
+    for book in root.findall('Book'):
+        book_num = int(book.get('num'))
+        chapters = {}
+        for chapter in book.findall('Chapter'):
+            ch_num = int(chapter.get('num'))
+            verses = {}
+            for verse in chapter.findall('Verse'):
+                v_num = int(verse.get('num'))
+                verses[v_num] = (verse.text or '').strip()
+            chapters[ch_num] = verses
+        books[book_num] = chapters
+    return books
 
-    if cache_key in ENGLISH_CHAPTER_CACHE:
-        soup = ENGLISH_CHAPTER_CACHE[cache_key]
-    else:
-        url = f"https://text.recoveryversion.bible/{book_num}_{book_name}_{chapter}.htm"
-        soup = None
-        for attempt in range(retries):
-            try:
-                response = requests.get(url, headers=HEADERS, timeout=15)
-                response.encoding = 'utf-8'
-                soup = BeautifulSoup(response.text, 'html.parser')
-                ENGLISH_CHAPTER_CACHE[cache_key] = soup
-                break
-            except Exception as e:
-                if attempt < retries - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    return f"(영어 오류: {e})"
+def _ensure_bible_loaded():
+    global KOREAN_BIBLE, ENGLISH_BIBLE
+    if not KOREAN_BIBLE:
+        try:
+            KOREAN_BIBLE = _load_bible_xml('recovery_bible_ko.xml')
+        except Exception as e:
+            KOREAN_BIBLE = {'__error__': str(e)}
+    if not ENGLISH_BIBLE:
+        try:
+            ENGLISH_BIBLE = _load_bible_xml('recovery_bible_en.xml')
+        except Exception as e:
+            ENGLISH_BIBLE = {'__error__': str(e)}
 
-    def extract_by_anchor(s, ch, v):
-        # <p id="Heb11-7" class="verse"> 형식: id가 {책약어}{장}-{절}
-        p_tag = s.find('p', id=re.compile(rf'^[A-Za-z]+{ch}-{v}$'), class_='verse')
-        if not p_tag:
-            return None
-        # <b> 태그(절 번호 참조) 제거 후 텍스트 추출
-        b_tag = p_tag.find('b')
-        if b_tag:
-            b_tag.extract()
-        text = p_tag.get_text(separator=' ', strip=True)
-        text = re.sub(r'\s+', ' ', text)
-        return text.strip() if text else None
+def _book_num(bible_ver, bible_sel_op):
+    # bible_ver=0(구약) → 1..39, bible_ver=1(신약) → 40..66
+    return bible_sel_op + (39 if bible_ver == 1 else 0)
 
+def _lookup(bible, bible_ver, bible_sel_op, chapter, verse=""):
+    if '__error__' in bible:
+        return None, f"(XML 로드 오류: {bible['__error__']})"
+    book = bible.get(_book_num(bible_ver, bible_sel_op))
+    if not book:
+        return None, "(해당 책 정보 없음)"
+    ch = book.get(int(chapter))
+    if not ch:
+        return None, "(해당 장을 찾을 수 없습니다)"
     if verse:
-        text = extract_by_anchor(soup, chapter, verse)
-        return text if text else "(영어 회복역: 해당 구절을 찾을 수 없습니다)"
+        v_text = ch.get(int(verse))
+        if v_text is None:
+            return None, "(해당 구절을 찾을 수 없습니다)"
+        return v_text, None
     else:
-        verses = []
-        v = 1
-        consecutive_misses = 0
-        while True:
-            text = extract_by_anchor(soup, chapter, str(v))
-            if text:
-                verses.append(f"{v} {text}")
-                v += 1
-                consecutive_misses = 0
-            else:
-                v += 1
-                consecutive_misses += 1
-                if consecutive_misses > 3:
-                    break
-        return ' '.join(verses) if verses else "(영어 회복역: 장 본문을 추출할 수 없습니다)"
+        parts = [f"{v} {ch[v]}" for v in sorted(ch.keys())]
+        if not parts:
+            return None, "(장 본문을 추출할 수 없습니다)"
+        return " ".join(parts), None
 
+def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
+    _ensure_bible_loaded()
+    text, err = _lookup(KOREAN_BIBLE, bible_ver, bible_sel_op, chapter, verse)
+    return text if text is not None else err
 
-def fetch_verse_text(bible_ver, bible_sel_op, chapter, verse="", retries=3):
-    cache_key = f"{bible_ver}_{bible_sel_op}_{chapter}"
-
-    if cache_key in CHAPTER_CACHE:
-        soup = CHAPTER_CACHE[cache_key]
-    else:
-        url = f"http://rv.or.kr/read_recovery.php?bibleVer={bible_ver}&bibOutline=&bibleSelOp={bible_sel_op}&bibChapt={chapter}"
-        soup = None
-        for attempt in range(retries):
-            try:
-                response = requests.get(url, headers=HEADERS, timeout=15)
-                response.encoding = 'utf-8' if 'utf-8' in response.headers.get('content-type', '').lower() else 'euc-kr'
-                soup = BeautifulSoup(response.text, 'html.parser')
-                CHAPTER_CACHE[cache_key] = soup
-                break
-            except Exception as e:
-                if attempt < retries - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    return f"(오류 발생: {e})"
-
-    def extract_v(v):
-        # <div class="num" id="절번호"> 구조를 직접 찾아서 정확한 절 텍스트 추출
-        num_div = soup.find('div', class_='num', id=str(v))
-        if num_div:
-            parent_verse = num_div.parent
-            text_div = parent_verse.find('div', class_='text')
-            if text_div:
-                return text_div.get_text(strip=True)
-        return None
-
-    if verse:
-        res = extract_v(verse)
-        return res if res else "해당 구절을 웹페이지에서 찾을 수 없습니다."
-    else:
-        verses = []
-        v = 1
-        consecutive_misses = 0
-        while True:
-            v_text = extract_v(str(v))
-            if v_text:
-                verses.append(f"{v} {v_text}")
-                v += 1
-                consecutive_misses = 0
-            else:
-                v += 1
-                consecutive_misses += 1
-                if consecutive_misses > 3:
-                    break
-
-        if verses:
-            return " ".join(verses)
-        else:
-            return "장 본문을 추출할 수 없습니다."
+def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
+    _ensure_bible_loaded()
+    text, err = _lookup(ENGLISH_BIBLE, bible_ver, bible_sel_op, chapter, verse)
+    if text is not None:
+        return text
+    return f"(영어 회복역: {err.strip('()')})" if err else "(영어 회복역: 오류)"
 
 def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_english=False):
     fetch_btn.config(state=tk.DISABLED)
@@ -544,5 +502,75 @@ clear_btn = tk.Button(
 clear_btn.pack(fill=tk.X)
 
 tk.Frame(mid_frame, bg="#f0f0f0").pack(expand=True, fill=tk.BOTH)
+
+# Ctrl+A / Cmd+A 전체 선택 단축키 (Tkinter Text 위젯 기본 미지원)
+# 한글 IME가 켜진 상태에서도 동작하도록 두벌식 한글 자모도 함께 바인딩
+# (a→ㅁ, c→ㅊ, v→ㅍ, x→ㅌ, z→ㅋ)
+def _select_all(event):
+    w = event.widget
+    w.tag_add(tk.SEL, '1.0', tk.END)
+    w.mark_set(tk.INSERT, '1.0')
+    w.see(tk.INSERT)
+    return 'break'
+
+def _copy(event):
+    w = event.widget
+    try:
+        w.event_generate('<<Copy>>')
+    except tk.TclError:
+        pass
+    return 'break'
+
+def _cut(event):
+    w = event.widget
+    try:
+        w.event_generate('<<Cut>>')
+    except tk.TclError:
+        pass
+    return 'break'
+
+def _paste(event):
+    w = event.widget
+    try:
+        w.event_generate('<<Paste>>')
+    except tk.TclError:
+        pass
+    return 'break'
+
+def _undo(event):
+    w = event.widget
+    try:
+        w.edit_undo()
+    except tk.TclError:
+        pass
+    return 'break'
+
+def _redo(event):
+    w = event.widget
+    try:
+        w.edit_redo()
+    except tk.TclError:
+        pass
+    return 'break'
+
+# undo/redo 활성화
+input_box.config(undo=True, autoseparators=True, maxundo=-1)
+output_box.config(undo=True, autoseparators=True, maxundo=-1)
+
+_SHORTCUTS = [
+    # (콜백, 영문 키, 한글 자모)
+    (_select_all, ('a', 'A'), ('ㅁ',)),
+    (_copy,       ('c', 'C'), ('ㅊ',)),
+    (_cut,        ('x', 'X'), ('ㅌ',)),
+    (_paste,      ('v', 'V'), ('ㅍ',)),
+    (_undo,       ('z', 'Z'), ('ㅋ',)),
+    (_redo,       ('y', 'Y'), ('ㅛ',)),
+]
+
+for _w in (input_box, output_box):
+    for _cb, _en_keys, _ko_keys in _SHORTCUTS:
+        for _k in _en_keys + _ko_keys:
+            _w.bind(f'<Control-{_k}>', _cb)
+            _w.bind(f'<Command-{_k}>', _cb)
 
 root.mainloop()

@@ -5,7 +5,7 @@ a = Analysis(
     ['getbibletext.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('recovery_bible_ko.xml', '.'), ('recovery_bible_en.xml', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
