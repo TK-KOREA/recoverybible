@@ -570,7 +570,10 @@ _SHORTCUTS = [
 for _w in (input_box, output_box):
     for _cb, _en_keys, _ko_keys in _SHORTCUTS:
         for _k in _en_keys + _ko_keys:
-            _w.bind(f'<Control-{_k}>', _cb)
-            _w.bind(f'<Command-{_k}>', _cb)
+            for _mod in ('Control', 'Command'):
+                try:
+                    _w.bind(f'<{_mod}-{_k}>', _cb)
+                except tk.TclError:
+                    pass
 
 root.mainloop()
