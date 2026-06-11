@@ -276,19 +276,19 @@ def fetch_english_verse_text(bible_ver, bible_sel_op, chapter, verse=""):
         return text
     return f"(영어 회복역: {err.strip('()')})" if err else "(영어 회복역: 오류)"
 
-def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_english=False):
-    fetch_btn.config(state=tk.DISABLED)
-    status_label.config(text="가져오기 진행 중... 잠시만 기다려주세요.")
-    output_box.delete('1.0', tk.END)
-    
-    # 🔥 핵심 로직: 한국어 자연어 '장/절' 표현을 기계가 인식하기 쉬운 기호로 사전 정규화(치환)
+def parse_verses(text_input, dedup=True):
+    """원문에서 성경 구절 참조를 추출해 (bv, bso, 장, 절) 튜플 리스트로 반환.
+
+    dedup=True  → 동일 구절을 한 번만 담는다(기존 일반 추출 동작).
+    dedup=False → 등장하는 대로 모두 담는다(개요 모드: 항목마다 중복 허용).
+    """
+    # 한국어 자연어 '장/절' 표현을 기계가 인식하기 쉬운 기호로 사전 정규화(치환)
     text_input = re.sub(r'(\d+)\s*장\s*(?=\d)', r'\1:', text_input)
     text_input = re.sub(r'(\d+)\s*절\s*(?:과|와|및|,\s*)\s*(?=\d)', r'\1, ', text_input)
     text_input = re.sub(r'(\d+)\s*절\s*(?:에서|부터|-|~)\s*(?=\d)', r'\1-', text_input)
     text_input = re.sub(r'(?<=\d)\s*절(?:까지)?', '', text_input)
 
     # 단일 장 책: "유 20" → "유 1:20" (장 구분이 없으므로 숫자를 절로 해석)
-    # ":"·"장"·연속 숫자·한글이 뒤따르면 변환하지 않음 ("유 1:20", "유 1장" 등은 그대로 유지)
     for _book in SINGLE_CHAPTER_BOOKS:
         text_input = re.sub(
             rf'({re.escape(_book)})\s+(\d+)(?![:\d장가-힣])',
@@ -296,27 +296,16 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_en
             text_input
         )
 
-    pattern = r'([가-힣]+)?\s*(\d+)\s*(?:(장)(?:\s*(\d+)절)?|:\s*(\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:)(?:\s*,\s*\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:))*))'
+    verses = []
+    seen = set()
 
-    current_book = None
-    last_end_pos = -100
-
-    results = []
-    seen_verses = set()
-
-    def append_result(bv, bso, ch, vs):
-        valid, err_msg = validate_ref(bv, bso, ch, vs)
-        if not valid:
-            results.append(f"[오류] {err_msg}")
-            return
-        ko_ref = get_korean_ref(bv, bso, ch, vs)
-        text = fetch_verse_text(bv, bso, ch, vs)
-        line = f"[{ko_ref}] {text}"
-        if include_english:
-            en_text = fetch_english_verse_text(bv, bso, ch, vs)
-            en_ref = get_english_ref(bv, bso, ch, vs)
-            line += f"\n[{en_ref}] {en_text}"
-        results.append(line)
+    def add(bv, bso, ch, vs):
+        if dedup:
+            ukey = f"{bv}_{bso}_{ch}:{vs}"
+            if ukey in seen:
+                return
+            seen.add(ukey)
+        verses.append((bv, bso, str(ch), str(vs)))
 
     # 장 횡단 범위 처리: "히 1:1-3:1" → 1장1절 ~ 3장1절 전체 구절
     def expand_cross_range(m):
@@ -334,14 +323,16 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_en
             start_v = v1 if ch == ch1 else 1
             end_v = v2 if ch == ch2 else max_v
             for v in range(start_v, min(end_v, max_v) + 1):
-                ukey = f"{bv}_{bso}_{ch}:{v}"
-                if ukey not in seen_verses:
-                    seen_verses.add(ukey)
-                    append_result(bv, bso, str(ch), str(v))
+                add(bv, bso, str(ch), str(v))
         return ''  # 본 루프에서 중복 처리되지 않도록 제거
 
     cross_pattern = r'([가-힣]+)\s*(\d+):(\d+)\s*-\s*(\d+):(\d+)'
     text_input = re.sub(cross_pattern, expand_cross_range, text_input)
+
+    pattern = r'([가-힣]+)?\s*(\d+)\s*(?:(장)(?:\s*(\d+)절)?|:\s*(\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:)(?:\s*,\s*\d+(?!\d)(?:\s*-\s*\d+(?!\d))?(?!\s*:))*))'
+
+    current_book = None
+    last_end_pos = -100
 
     for match in re.finditer(pattern, text_input):
         book_raw = match.group(1)
@@ -349,7 +340,6 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_en
         is_jang_word = match.group(3) == '장'
         jang_verse = match.group(4)
         colon_verses_str = match.group(5)
-
         start_pos = match.start()
 
         if book_raw:
@@ -366,52 +356,262 @@ def parse_and_scrape(text_input, output_box, status_label, fetch_btn, include_en
 
         try:
             if is_jang_word and jang_verse:
-                unique_key = f"{bible_ver}_{bible_sel_op}_{chapter}:{jang_verse}"
-                if unique_key not in seen_verses:
-                    seen_verses.add(unique_key)
-                    append_result(bible_ver, bible_sel_op, chapter, jang_verse)
-
+                add(bible_ver, bible_sel_op, chapter, jang_verse)
             elif is_jang_word and not jang_verse:
                 key = (bible_ver, bible_sel_op)
                 ch_int = int(chapter)
                 max_v = VERSE_COUNTS.get(key, [0] * ch_int)[ch_int - 1] if key in VERSE_COUNTS and ch_int <= len(VERSE_COUNTS[key]) else 0
                 for v in range(1, max_v + 1):
-                    unique_key = f"{bible_ver}_{bible_sel_op}_{chapter}:{v}"
-                    if unique_key not in seen_verses:
-                        seen_verses.add(unique_key)
-                        append_result(bible_ver, bible_sel_op, chapter, str(v))
-
+                    add(bible_ver, bible_sel_op, chapter, str(v))
             elif colon_verses_str:
-                verse_parts = colon_verses_str.split(',')
-                for part in verse_parts:
+                for part in colon_verses_str.split(','):
                     part = part.strip()
                     if '-' in part:
                         v_start, v_end = part.split('-')
                         for v in range(int(v_start), int(v_end) + 1):
-                            unique_key = f"{bible_ver}_{bible_sel_op}_{chapter}:{v}"
-                            if unique_key not in seen_verses:
-                                seen_verses.add(unique_key)
-                                append_result(bible_ver, bible_sel_op, chapter, str(v))
+                            add(bible_ver, bible_sel_op, chapter, str(v))
                     else:
-                        v = part
-                        unique_key = f"{bible_ver}_{bible_sel_op}_{chapter}:{v}"
-                        if unique_key not in seen_verses:
-                            seen_verses.add(unique_key)
-                            append_result(bible_ver, bible_sel_op, chapter, v)
-                
-        except Exception as e:
-            results.append(f"[{current_book} {chapter}장] 관련 오류: {e}")
+                        add(bible_ver, bible_sel_op, chapter, part)
+        except Exception:
+            # 개별 참조 파싱 오류는 건너뜀
+            continue
+
+    return verses
+
+
+def format_verse_line(bv, bso, ch, vs, include_english=False, bracket=True):
+    """단일 구절을 출력 문자열로 변환 (유효성 검증 포함).
+
+    bracket=True  → "[요 1:1] 본문"  (기존 일반 추출 형식)
+    bracket=False → "요 1:1 본문"     (개요 모드 형식)
+    유효하지 않은 참조는 "[오류] ..." 문자열을 돌려준다.
+    """
+    valid, err_msg = validate_ref(bv, bso, ch, vs)
+    if not valid:
+        return f"[오류] {err_msg}"
+    ko_ref = get_korean_ref(bv, bso, ch, vs)
+    text = fetch_verse_text(bv, bso, ch, vs)
+    line = f"[{ko_ref}] {text}" if bracket else f"{ko_ref} {text}"
+    if include_english:
+        en_text = fetch_english_verse_text(bv, bso, ch, vs)
+        en_ref = get_english_ref(bv, bso, ch, vs)
+        line += f"\n[{en_ref}] {en_text}" if bracket else f"\n{en_ref} {en_text}"
+    return line
+
+
+# 개요(목차) 마커 인식: 줄 시작(들여쓰기 허용) + 마커 + '.'
+# 마커 = 로마숫자(대) / 알파벳 대문자 / 아라비아 숫자 / 알파벳 소문자 / 로마숫자(소)
+# 유니코드 로마숫자 글자(Ⅰ Ⅱ … U+2160~, ⅰ ⅱ … U+2170~)도 함께 인식한다.
+OUTLINE_MARKER_RE = re.compile(
+    r'^([ \t]*)('
+    r'(?:[Ⅰ-Ⅿ]+|[IVXLCDM]+|[A-Z]|\d{1,3}|[ⅰ-ⅿ]+|[ivxlcdm]+|[a-z])'
+    r')\.(?=\s|$)'
+)
+
+# 메시지(말씀) 제목 줄 인식: "메시지 1", "메세지 2", "Message 3" 등
+MESSAGE_HEADER_RE = re.compile(r'^\s*(?:메시지|메세지|message)\s*(\d+)', re.IGNORECASE)
+
+# 개요 단계 유형(얕음→깊음): 로마(대) < 알파벳(대) < 아라비아 < 알파벳(소) < 로마(소)
+_RU, _AU, _AR, _AL, _RL = 0, 1, 2, 3, 4
+
+# 유니코드 로마숫자 글자 → ASCII 로마자 (값 계산 및 대/소문자 판별용)
+_UNI_ROMAN = {
+    'Ⅰ': 'I', 'Ⅱ': 'II', 'Ⅲ': 'III', 'Ⅳ': 'IV',
+    'Ⅴ': 'V', 'Ⅵ': 'VI', 'Ⅶ': 'VII', 'Ⅷ': 'VIII',
+    'Ⅸ': 'IX', 'Ⅹ': 'X', 'Ⅺ': 'XI', 'Ⅻ': 'XII',
+    'Ⅼ': 'L', 'Ⅽ': 'C', 'Ⅾ': 'D', 'Ⅿ': 'M',
+    'ⅰ': 'i', 'ⅱ': 'ii', 'ⅲ': 'iii', 'ⅳ': 'iv',
+    'ⅴ': 'v', 'ⅵ': 'vi', 'ⅶ': 'vii', 'ⅷ': 'viii',
+    'ⅸ': 'ix', 'ⅹ': 'x', 'ⅺ': 'xi', 'ⅻ': 'xii',
+    'ⅼ': 'l', 'ⅽ': 'c', 'ⅾ': 'd', 'ⅿ': 'm',
+}
+
+
+def _roman_to_int(s):
+    vals = {'i': 1, 'v': 5, 'x': 10, 'l': 50, 'c': 100, 'd': 500, 'm': 1000}
+    total, prev = 0, 0
+    for ch in reversed(s.lower()):
+        v = vals.get(ch, 0)
+        if v < prev:
+            total -= v
+        else:
+            total += v
+            prev = v
+    return total
+
+
+def _marker_candidates(t):
+    """마커 토큰을 가능한 (단계유형, 순번) 해석 목록으로 변환.
+    예) 'I' → 로마(대) 또는 알파벳(대), 'A' → 알파벳(대), '3' → 아라비아.
+    'Ⅰ'/'ⅰ' 같은 유니코드 로마숫자 글자는 모호함 없이 로마(대)/로마(소)로 본다.
+    """
+    if t.isdigit():
+        return [(_AR, int(t))]
+    if all(c in _UNI_ROMAN for c in t):
+        ascii_roman = ''.join(_UNI_ROMAN[c] for c in t)
+        typ = _RU if ascii_roman[:1].isupper() else _RL
+        return [(typ, _roman_to_int(ascii_roman))]
+    cands = []
+    if t.isupper():
+        if all(c in 'IVXLCDM' for c in t):
+            cands.append((_RU, _roman_to_int(t)))
+        if len(t) == 1:
+            cands.append((_AU, ord(t) - ord('A') + 1))
+    else:
+        if all(c in 'ivxlcdm' for c in t):
+            cands.append((_RL, _roman_to_int(t)))
+        if len(t) == 1:
+            cands.append((_AL, ord(t) - ord('a') + 1))
+    return cands
+
+
+def _choose_marker_level(path, cands):
+    """현재 경로(path)와 후보들을 비교해 가장 그럴듯한 (단계유형, 순번)을 고른다.
+    - 같은 유형이 이미 열려 있고 '바로 다음 순번'이면 형제 항목으로 이어짐(최우선).
+    - 순번이 1이고 현재보다 깊은 유형이면 새 하위 단계를 시작.
+    이 규칙으로 'I'가 로마(대) I 인지, A·…·H 다음의 알파벳(대) I 인지 등을 구분한다.
+    """
+    deepest = path[-1][0] if path else -1
+    best, best_score = None, -1
+    for typ, val in cands:
+        same = next((p for p in path if p[0] == typ), None)
+        if same is not None and val == same[1] + 1:
+            score = 100        # 형제(바로 다음 순번)
+        elif val == 1 and typ > deepest:
+            score = 80         # 새 하위 단계 시작(첫 기호)
+        elif same is not None and val == same[1]:
+            score = 40
+        elif typ > deepest:
+            score = 30
+        elif same is not None:
+            score = 20
+        else:
+            score = 10
+        if score > best_score:
+            best, best_score = (typ, val), score
+    return best
+
+
+def _breadcrumb(path):
+    return " ".join(f"{p[2]}." for p in path)
+
+
+def _is_strict_prefix(a, b):
+    """경로 a가 경로 b의 '진짜 상위'인지 여부 (a가 b의 앞부분이고 더 얕음)."""
+    if not a or not b:
+        return False
+    return len(a) < len(b) and b[:len(a)] == a
+
+
+def parse_outline(text_input, include_english=False):
+    """개요(목차) 형태의 원문에서 항목별 성경 구절을 추출.
+
+    - "메시지 N" 줄은 별도 머리 항목으로 보고, 그 아래 제목/"성경:" 줄의 구절을
+      "메시지 N." 항목으로 묶는다(다음 마커 전까지).
+    - 각 마커 줄(I·A·1·a·i 등)은 한 항목을 시작하며, 마커는 단독이 아니라
+      로마숫자부터 현재 단계까지 누적해 "I. A. 1. a." 형태로 표시한다.
+    - 첫 머리/마커 이전의 줄은 무시한다.
+    - 항목 사이에서는 구절을 중복 제거하지 않는다(같은 구절이라도 항목마다 모두 표시).
+    - 구절이 있는 항목은 헤더+구절을 출력한다. 구절이 없는 항목은, 바로 다음
+      항목이 그 하위(브레드크럼에 이미 포함됨)가 아니라면 단계가 빠져 보이지
+      않도록 마커(헤더)만이라도 출력한다.
+    """
+    items = []          # [{'header','lines','path'}, ...]
+    current = None
+    path = []           # [(유형, 순번, 마커문자), ...]  누적 경로
+
+    for line in text_input.split('\n'):
+        msg = MESSAGE_HEADER_RE.match(line)
+        mk = None if msg else OUTLINE_MARKER_RE.match(line)
+        if msg:
+            if current:
+                items.append(current)
+            path = []   # 새 메시지 → 개요 경로 초기화
+            current = {'header': f"메시지 {msg.group(1)}.", 'lines': [line], 'path': None}
+        elif mk:
+            chosen = _choose_marker_level(path, _marker_candidates(mk.group(2)))
+            typ, val = chosen if chosen else (_RU, 1)
+            path = [p for p in path if p[0] < typ]
+            path.append((typ, val, mk.group(2)))
+            if current:
+                items.append(current)
+            current = {
+                'header': _breadcrumb(path),
+                'lines': [line],
+                'path': tuple((p[0], p[1]) for p in path),
+            }
+        elif current:
+            current['lines'].append(line)
+        # 첫 머리/마커 이전 줄은 버린다
+
+    if current:
+        items.append(current)
+
+    # 항목별 구절 추출
+    for it in items:
+        verses = parse_verses('\n'.join(it['lines']), dedup=False)
+        valid = []
+        for (bv, bso, ch, vs) in verses:
+            ok, _msg = validate_ref(bv, bso, ch, vs)
+            if not ok:
+                continue
+            valid.append(format_verse_line(bv, bso, ch, vs, include_english, bracket=False))
+        it['valid'] = valid
+
+    out_lines = []
+    n = len(items)
+    for idx, it in enumerate(items):
+        if it['valid']:
+            out_lines.append(it['header'])
+            out_lines.extend(it['valid'])
+            out_lines.append("")   # 구절 항목 뒤 빈 줄로 구분
+        else:
+            # 구절은 없지만, 다음 항목의 상위가 아니라면(= 브레드크럼에 안 묻힘)
+            # 단계가 누락돼 보이므로 마커만 표시한다.
+            nxt = items[idx + 1] if idx + 1 < n else None
+            if not (nxt and _is_strict_prefix(it['path'], nxt['path'])):
+                out_lines.append(it['header'])
+
+    while out_lines and out_lines[-1] == "":
+        out_lines.pop()
+    return out_lines
+
+
+def parse_and_scrape(text_input, output_box, status_label, fetch_btn,
+                     include_english=False, include_outline=False):
+    fetch_btn.config(state=tk.DISABLED)
+    status_label.config(text="가져오기 진행 중... 잠시만 기다려주세요.")
+    output_box.delete('1.0', tk.END)
+
+    if include_outline:
+        out_lines = parse_outline(text_input, include_english)
+        if not out_lines:
+            output_box.insert(tk.END, "개요에서 성경 구절을 찾지 못했습니다.")
+        else:
+            for line in out_lines:
+                output_box.insert(tk.END, line + "\n")
+        status_label.config(text="가져오기 완료!")
+        fetch_btn.config(state=tk.NORMAL)
+        return
+
+    verses = parse_verses(text_input, dedup=True)
+    results = [
+        format_verse_line(bv, bso, ch, vs, include_english, bracket=True)
+        for (bv, bso, ch, vs) in verses
+    ]
 
     if not results:
         output_box.insert(tk.END, "지문에서 유효한 성경 구절을 찾지 못했습니다.")
     else:
         for res in results:
             output_box.insert(tk.END, res + "\n")
-            
+
     status_label.config(text="가져오기 완료!")
     fetch_btn.config(state=tk.NORMAL)
 
-def on_fetch_click(input_box, output_box, status_label, fetch_btn, include_english_var):
+
+def on_fetch_click(input_box, output_box, status_label, fetch_btn,
+                   include_english_var, include_outline_var):
     text_input = input_box.get('1.0', tk.END)
     if not text_input.strip():
         messagebox.showwarning("경고", "먼저 왼쪽에 지문을 입력해주세요.")
@@ -419,7 +619,8 @@ def on_fetch_click(input_box, output_box, status_label, fetch_btn, include_engli
 
     thread = threading.Thread(
         target=parse_and_scrape,
-        args=(text_input, output_box, status_label, fetch_btn, include_english_var.get())
+        args=(text_input, output_box, status_label, fetch_btn,
+              include_english_var.get(), include_outline_var.get())
     )
     thread.daemon = True
     thread.start()
@@ -481,6 +682,14 @@ english_chk = tk.Checkbutton(
 )
 english_chk.pack(pady=(0, 6))
 
+include_outline_var = tk.BooleanVar(value=False)
+outline_chk = tk.Checkbutton(
+    btn_group, text="개요 구절 추출", variable=include_outline_var,
+    font=(_FONT, 9), bg="#f0f0f0", activebackground="#f0f0f0",
+    cursor="hand2"
+)
+outline_chk.pack(pady=(0, 6))
+
 fetch_btn = tk.Button(
     btn_group, text="가져오기 ▶", font=(_FONT, 11, "bold"),
     width=10, height=2, bg="#43a047", fg="black",
@@ -488,7 +697,7 @@ fetch_btn = tk.Button(
     relief=tk.FLAT, cursor="hand2", bd=0,
     highlightbackground="#43a047", highlightthickness=2
 )
-fetch_btn.config(command=lambda: on_fetch_click(input_box, output_box, status_label, fetch_btn, include_english_var))
+fetch_btn.config(command=lambda: on_fetch_click(input_box, output_box, status_label, fetch_btn, include_english_var, include_outline_var))
 fetch_btn.pack(fill=tk.X, pady=(0, 6))
 
 clear_btn = tk.Button(
